@@ -16,7 +16,7 @@ constexpr int PIN_SPI_SCLK  = 12;
 constexpr int PIN_SPI_MOSI  = 11;
 constexpr int PIN_SPI_MISO  = 13;
 constexpr int PIN_IMU_CS    = 10;
-constexpr uint32_t SPI_FREQ = 4'000'000; // 4 MHz — conservative for bringup
+constexpr uint32_t SPI_FREQ = 4000000; // 4 MHz — conservative for bringup
 
 // ── Servo Pins (LEDC channels) ───────────────────────────────────────────────
 // Drive servos (continuous rotation, omniwheel contact)
