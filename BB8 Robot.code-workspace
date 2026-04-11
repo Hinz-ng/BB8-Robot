@@ -1,0 +1,24 @@
+{
+	"folders": [
+		{
+			"path": "../../../VS code"
+		},
+		{
+			"name": "robot-controller",
+			"path": "../robot-controller"
+		},
+		{
+			"name": "i2c-scanner-test",
+			"path": "."
+		},
+		{
+			"name": "FPV Drone Camera Control",
+			"path": "../FPV Drone Camera Control"
+		},
+		{
+			"name": "Servo Tester",
+			"path": "../Servo Tester"
+		}
+	],
+	"settings": {}
+}
