@@ -626,26 +626,38 @@ static WebComm* _instance = nullptr;
 bool WebComm::begin(const char* ssid, const char* pass) {
     _instance = this;
 
-    // Connect to WiFi
-    Serial.printf("[WEBCOMM] Connecting to SSID: %s\n", ssid);
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, pass);
+    // WiFi bring-up: AP-first if ssid is empty, STA with AP fallback otherwise.
+    // Passing ssid="" from main.cpp bypasses the 15 s STA timeout entirely.
+    if (ssid == nullptr || ssid[0] == '\0') {
+        // ── AP mode (no credentials supplied) ────────────────────────────────
+        WiFi.mode(WIFI_AP);
+        WiFi.softAP("BB8-Robot", "bb8robot1");
+        Serial.printf("[WEBCOMM] AP mode. IP: %s\n",
+                      WiFi.softAPIP().toString().c_str());
+    } else {
+        // ── STA mode with AP fallback ─────────────────────────────────────────
+        Serial.printf("[WEBCOMM] Connecting to SSID: %s\n", ssid);
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(ssid, pass);
 
-    uint32_t t0 = millis();
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(250);
-        Serial.print('.');
-        if (millis() - t0 > 15000) {
-            Serial.println("\n[WEBCOMM] WiFi timeout — falling back to AP mode");
-            WiFi.mode(WIFI_AP);
-            WiFi.softAP("BB8-Robot", "bb8robot1");
-            Serial.printf("[WEBCOMM] AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-            break;
+        uint32_t t0 = millis();
+        while (WiFi.status() != WL_CONNECTED) {
+            delay(250);
+            Serial.print('.');
+            if (millis() - t0 > 15000) {
+                Serial.println("\n[WEBCOMM] WiFi timeout — falling back to AP mode");
+                WiFi.mode(WIFI_AP);
+                WiFi.softAP("BB8-Robot", "bb8robot1");
+                Serial.printf("[WEBCOMM] AP IP: %s\n",
+                              WiFi.softAPIP().toString().c_str());
+                break;
+            }
         }
-    }
 
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("\n[WEBCOMM] Connected. IP: %s\n", WiFi.localIP().toString().c_str());
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("\n[WEBCOMM] Connected. IP: %s\n",
+                          WiFi.localIP().toString().c_str());
+        }
     }
 
     // Attach WebSocket handler
@@ -653,8 +665,10 @@ bool WebComm::begin(const char* ssid, const char* pass) {
     _server.addHandler(&_ws);
 
     // Serve HTML root
+    // send_P is deprecated in mathieucarbou/ESPAsyncWebServer v3 — use send().
+    // INDEX_HTML is in PROGMEM; the v3 send() overload handles PROGMEM correctly.
     _server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
-        req->send_P(200, "text/html", INDEX_HTML);
+        req->send(200, "text/html", INDEX_HTML);
     });
 
     // 404 handler
@@ -677,7 +691,7 @@ void WebComm::update() {
 void WebComm::broadcastIMU(const RawIMUData& data) {
     if (_ws.count() == 0) return; // nobody listening — skip JSON build
 
-    // Build JSON — fixed-size doc; tweak if fields are added
+    // Build JSON — JsonDocument replaces StaticJsonDocument in ArduinoJson v7
     JsonDocument doc;
     doc["type"]      = "imu";
     doc["ax"]        = serialized(String(data.accel_x_ms2, 3));
