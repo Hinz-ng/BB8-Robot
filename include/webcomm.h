@@ -14,6 +14,7 @@
 #include <ArduinoJson.h>
 #include <functional>
 #include "imu.h"
+#include "state_estimator.h"
 
 // ── Command callbacks ─────────────────────────────────────────────────────────
 // Drive callback: vel_x and vel_y in range [-1.0, +1.0]
@@ -49,7 +50,7 @@ public:
 
     // Called from main control loop at WEBCOMM_BROADCAST_HZ
     // Assembles JSON and pushes to all connected clients
-    void broadcastIMU(const RawIMUData& data);
+    void broadcastState(const RawIMUData& raw, const IMUState& est);
 
     // Register before begin() — called when a drive command arrives from UI
     // If not registered, drive commands are silently dropped

@@ -18,10 +18,12 @@
 #include "imu.h"
 #include "webcomm.h"
 #include "project_wide_defs.h"
+#include "state_estimator.h"
 
 // ── Global module instances ───────────────────────────────────────────────────
-IMU     imu;
-WebComm webcomm;
+IMU            imu;
+StateEstimator stateEstimator;   // ← ADD
+WebComm        webcomm;
 
 // ── Interval helper ───────────────────────────────────────────────────────────
 static bool every(uint32_t& last, uint32_t now, uint32_t period_ms) {
@@ -74,8 +76,11 @@ void loop() {
     constexpr uint32_t BROADCAST_MS = 1000 / WEBCOMM_BROADCAST_HZ;
     uint32_t now = millis();
 
-    // ── Layer 1: IMU read every tick ─────────────────────────────────────────
+     // ── Layer 1: IMU read every tick ─────────────────────────────────────────
     RawIMUData data = imu.read();
+
+    // ── Layer 2: state estimate every tick ───────────────────────────────────
+    IMUState est = stateEstimator.update(data);   // ← ADD
 
     if (!data.valid) {
         static uint32_t lastWarn = 0;
@@ -84,9 +89,9 @@ void loop() {
         }
     }
 
-    // ── Layer 7: broadcast IMU at WEBCOMM_BROADCAST_HZ ──────────────────────
+    // ── Layer 7: broadcast at WEBCOMM_BROADCAST_HZ ──────────────────────────
     if (every(lastBroadcast, now, BROADCAST_MS)) {
-        webcomm.broadcastIMU(data);
+        webcomm.broadcastState(data, est);        // ← was broadcastIMU(data)
     }
 
     // ── Layer 7: WebSocket cleanup (every tick) ───────────────────────────────
@@ -98,9 +103,11 @@ void loop() {
         if (data.valid) {
             Serial.printf("Accel [m/s²] X:%6.3f Y:%6.3f Z:%6.3f | "
                           "Gyro [rad/s] X:%7.4f Y:%7.4f Z:%7.4f | "
+                          "Pitch:%6.1f° Roll:%6.1f° | "
                           "Clients:%u\n",
                           data.accel_x_ms2, data.accel_y_ms2, data.accel_z_ms2,
                           data.gyro_x_rads, data.gyro_y_rads, data.gyro_z_rads,
+                          est.pitch_deg, est.roll_deg,
                           webcomm.clientCount());
         }
     }

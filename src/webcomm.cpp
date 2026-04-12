@@ -377,6 +377,27 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       </div>
     </div>
 
+<div class="divider"></div>
+
+    <!-- Complementary Filter State Estimate -->
+    <div class="imu-section">
+      <div class="imu-section-label">State Estimate — complementary filter</div>
+      <div class="imu-row" style="grid-template-columns: 1fr 1fr;">
+        <div class="imu-cell">
+          <div class="imu-axis">Pitch</div>
+          <div class="imu-val" id="estPitch">—</div>
+          <div class="imu-unit">deg</div>
+          <div class="bar-track"><div class="bar-fill" id="estPitchBar"></div></div>
+        </div>
+        <div class="imu-cell">
+          <div class="imu-axis">Roll</div>
+          <div class="imu-val" id="estRoll">—</div>
+          <div class="imu-unit">deg</div>
+          <div class="bar-track"><div class="bar-fill" id="estRollBar"></div></div>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /imuBody -->
 </div>
 
@@ -478,6 +499,13 @@ function handlePacket(p) {
     // Badge colour
     const badge = document.getElementById('imuBadge');
     badge.style.color = p.valid ? '#22c55e' : '#ef4444';
+
+    // State estimate — bar scale matches SPHERE_ESTOP_PITCH_DEG (30°)
+    // 'hot' highlight triggers at ±15° (50% of estop threshold)
+    if (p.pitch_deg !== undefined) {
+      setImu('estPitch', parseFloat(p.pitch_deg), 30, 1);
+      setImu('estRoll',  parseFloat(p.roll_deg),  30, 1);
+    }
 
     document.getElementById('imuStatus').textContent  = p.valid ? 'OK' : 'ERR';
     document.getElementById('uptime').textContent     = fmtUptime(p.uptime_ms);
@@ -688,24 +716,31 @@ void WebComm::update() {
     _ws.cleanupClients();
 }
 
-void WebComm::broadcastIMU(const RawIMUData& data) {
-    if (_ws.count() == 0) return; // nobody listening — skip JSON build
+// ── REPLACE the entire broadcastIMU() function with this ─────────────────────
 
-    // Build JSON — JsonDocument replaces StaticJsonDocument in ArduinoJson v7
+void WebComm::broadcastState(const RawIMUData& raw, const IMUState& est) {
+    if (_ws.count() == 0) return;
+
     JsonDocument doc;
     doc["type"]      = "imu";
-    doc["ax"]        = serialized(String(data.accel_x_ms2, 3));
-    doc["ay"]        = serialized(String(data.accel_y_ms2, 3));
-    doc["az"]        = serialized(String(data.accel_z_ms2, 3));
-    doc["gx"]        = serialized(String(data.gyro_x_rads, 4));
-    doc["gy"]        = serialized(String(data.gyro_y_rads, 4));
-    doc["gz"]        = serialized(String(data.gyro_z_rads, 4));
-    doc["valid"]     = data.valid;
+    // Raw IMU
+    doc["ax"]        = serialized(String(raw.accel_x_ms2, 3));
+    doc["ay"]        = serialized(String(raw.accel_y_ms2, 3));
+    doc["az"]        = serialized(String(raw.accel_z_ms2, 3));
+    doc["gx"]        = serialized(String(raw.gyro_x_rads, 4));
+    doc["gy"]        = serialized(String(raw.gyro_y_rads, 4));
+    doc["gz"]        = serialized(String(raw.gyro_z_rads, 4));
+    doc["valid"]     = raw.valid;
+    // State estimate
+    doc["pitch_deg"] = serialized(String(est.pitch_deg, 1));
+    doc["roll_deg"]  = serialized(String(est.roll_deg,  1));
+    doc["est_valid"] = est.valid;
+    // System
     doc["uptime_ms"] = millis();
     doc["clients"]   = (uint8_t)_ws.count();
 
     String out;
-    out.reserve(200);
+    out.reserve(220);
     serializeJson(doc, out);
     _ws.textAll(out);
 }
