@@ -20,6 +20,7 @@
 #include "project_wide_defs.h"
 #include "state_estimator.h"
 #include "motion_controller.h"
+#include <cmath>
 
 // ── Global module instances ───────────────────────────────────────────────────
 IMU            imu;

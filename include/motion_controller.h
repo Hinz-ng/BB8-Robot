@@ -2,7 +2,7 @@
 // layer:   3 — motion control; pure drive logic, no sensor reads
 // purpose: differential drive mixing; translates (vel_x, vel_y) → servo PWM
 // inputs:  vel_x, vel_y in [-1, +1]  (from WebComm DriveCallback)
-//          speed_scale in [0, 1]     (from WebComm SpeedCallback)
+//          speed_scale in [0, DRIVE_SPEED_MAX] (from WebComm SpeedCallback)
 // outputs: LEDC PWM on PIN_SERVO_LEFT, PIN_SERVO_RIGHT
 // deps:    project_wide_defs.h, Arduino.h (LEDC — arduino-esp32 v3 API)
 // date:    2025
@@ -40,7 +40,7 @@ public:
     void setDrive(float vel_x, float vel_y);
 
     // Set speed scale multiplier. Called from WebComm SpeedCallback.
-    // 0.0 = servos at neutral (stopped), 1.0 = full speed.
+    // 0.0 = servos at neutral (stopped), DRIVE_SPEED_MAX = full configured speed.
     // Clipped to [0.0, DRIVE_SPEED_MAX]. Re-applies last velocity immediately.
     void setSpeedScale(float scale);
 
@@ -56,7 +56,9 @@ private:
     float _lastVelY{0.0f};
 
     // Map normalised value [-1, +1] → PWM microseconds [MIN_US, MAX_US].
-    // Linear: us = MID + norm * (MAX - MID).  Symmetric range assumed (500 µs each side).
+    // Piecewise around MID so asymmetric calibration also works:
+    //   norm >= 0: MID + norm * (MAX - MID)
+    //   norm <  0: MID + norm * (MID - MIN)
     // If SERVO_PULSE_MIN/MID/MAX_US change, this automatically adapts.
     static uint16_t normToUs(float norm);
 

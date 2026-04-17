@@ -75,7 +75,18 @@ IMUState StateEstimator::update(const SFLPData& sflp) {
         break;
     }
 
-    // kRadToDeg: named to avoid collision with Arduino.h's RAD_TO_DEG macro
+   // Guard NaN — degenerate quaternion inputs can produce NaN via atan2f(0,0).
+    // Without this, a single bad SFLP packet corrupts the broadcast JSON and
+    // kills the entire WebSocket display until the next valid packet.
+    if (std::isnan(_state.pitch_rad) || std::isnan(_state.roll_rad)) {
+        _state.pitch_rad = 0.0f;
+        _state.roll_rad  = 0.0f;
+        _state.pitch_deg = 0.0f;
+        _state.roll_deg  = 0.0f;
+        _state.valid     = false;
+        return _state;
+    }
+
     constexpr float kRadToDeg = 180.0f / 3.14159265f;
     _state.pitch_deg = _state.pitch_rad * kRadToDeg;
     _state.roll_deg  = _state.roll_rad  * kRadToDeg;

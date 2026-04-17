@@ -104,15 +104,16 @@ void MotionController::stop() {
 
 uint16_t MotionController::normToUs(float norm) {
     // norm [-1, +1] → microseconds [SERVO_PULSE_MIN_US, SERVO_PULSE_MAX_US]
-    // Linear mapping through midpoint:
-    //   us = MID_US + norm * (MAX_US - MID_US)
-    // With the default 1000/1500/2000 range, half = 500 µs.
-    // If the servo's neutral or range is non-standard, adjust MIN/MID/MAX in
-    // project_wide_defs.h — this formula adapts automatically.
-    const float half = static_cast<float>(SERVO_PULSE_MAX_US - SERVO_PULSE_MID_US);
-    int32_t us = static_cast<int32_t>(
-        static_cast<float>(SERVO_PULSE_MID_US) + norm * half
-    );
+    // Piecewise mapping around midpoint:
+    //   norm >= 0: MID_US + norm * (MAX_US - MID_US)
+    //   norm <  0: MID_US + norm * (MID_US - MIN_US)
+    // This keeps full-range behaviour correct even if neutral is not centered.
+    const float n = clamp1(norm);
+    const float mid = static_cast<float>(SERVO_PULSE_MID_US);
+    const float posSpan = static_cast<float>(SERVO_PULSE_MAX_US - SERVO_PULSE_MID_US);
+    const float negSpan = static_cast<float>(SERVO_PULSE_MID_US - SERVO_PULSE_MIN_US);
+    const float span = (n >= 0.0f) ? posSpan : negSpan;
+    int32_t us = static_cast<int32_t>(mid + n * span);
     if (us < SERVO_PULSE_MIN_US) us = SERVO_PULSE_MIN_US;
     if (us > SERVO_PULSE_MAX_US) us = SERVO_PULSE_MAX_US;
     return static_cast<uint16_t>(us);

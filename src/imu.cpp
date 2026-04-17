@@ -2,6 +2,7 @@
 #include "imu_registers.h"
 #include "project_wide_defs.h"
 #include <Arduino.h>
+#include <cmath>
 
 bool IMU::begin() {
     pinMode(PIN_IMU_CS, OUTPUT);
@@ -165,14 +166,23 @@ SFLPData IMU::readSFLP() {
 
     // Reconstruct qw from unit-quaternion constraint: qw = sqrt(1 − |q_vec|²)
     // qw² can go slightly negative due to float16 rounding — clamp and flag.
-    float qw2 = 1.0f - (out.qx*out.qx + out.qy*out.qy + out.qz*out.qz);
-    if (qw2 < 0.0f) {
-        out.qw    = 0.0f;
-        out.valid = false;  // |q_vec|² > 1 — float16 rounding; not a hardware fault
-    } else {
-        out.qw    = sqrtf(qw2);
-        out.valid = true;
-    }
+    // Guard NaN in vector components first — float16 0xFFFF decodes to NaN.
+// NaN comparisons always return false, so the qw2 < 0 check alone is blind to them.
+if (std::isnan(out.qx) || std::isnan(out.qy) || std::isnan(out.qz)) {
+    out.qx = out.qy = out.qz = 0.0f;
+    out.qw    = 1.0f;
+    out.valid = false;   // identity quaternion; SFLP not yet producing data
+    return out;
+}
+
+float qw2 = 1.0f - (out.qx*out.qx + out.qy*out.qy + out.qz*out.qz);
+if (qw2 < 0.0f) {
+    out.qw    = 1.0f;   // clamp to identity rather than 0 — avoids degenerate state
+    out.valid = false;
+} else {
+    out.qw    = sqrtf(qw2);
+    out.valid = true;
+}
 
     return out;
 }

@@ -7,12 +7,13 @@
 #include "project_wide_defs.h"
 #include <WiFi.h>
 #include <Arduino.h>
+#include <cmath>
 
 // ── Embedded HTML ─────────────────────────────────────────────────────────────
 // Single-file SPA: HTML + CSS + JS served from flash.
 // Stored in PROGMEM to keep it off the heap.
 // Edit freely — only the WebSocket message format must stay in sync with
-// the JSON keys emitted by broadcastIMU() below.
+// the JSON keys emitted by broadcastState() below.
 // ─────────────────────────────────────────────────────────────────────────────
 static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -230,7 +231,6 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     margin: 14px 0;
   }
 
-NEW:
   /* ── Speed control ──────────────────────────────────────── */
   .speed-row {
     display: flex;
@@ -441,17 +441,17 @@ NEW:
   <div class="card-header" onclick="toggleCard('speedCard')">
     <div class="card-title">
       Speed
-      <span class="badge" id="speedBadge">50%</span>
+      <span class="badge" id="speedBadge">100%</span>
     </div>
     <div class="chevron open" id="speedChevron">▾</div>
   </div>
   <div class="card-body open" id="speedBody">
     <div class="speed-row">
       <span class="speed-pct-label">0%</span>
-      <input type="range" id="speedSlider" min="0" max="100" value="50" step="1">
+      <input type="range" id="speedSlider" min="0" max="100" value="100" step="1">
       <span class="speed-pct-label">100%</span>
       <input type="number" class="speed-number" id="speedInput"
-             min="0" max="100" value="50">
+             min="0" max="100" value="100">
       <span class="speed-pct-label">%</span>
     </div>
   </div>
@@ -529,8 +529,18 @@ function connect() {
   ws.onmessage = (e) => {
     msgCount++;
     document.getElementById('msgCount').textContent = msgCount;
-    try { handlePacket(JSON.parse(e.data)); } catch(_) {}
+    try {
+      handlePacket(JSON.parse(e.data));
+    } catch (err) {
+      // Keep UI alive and expose packet issues in browser dev tools.
+      console.error('WS packet parse/handle error:', err, e.data);
+    }
   };
+}
+
+function toFiniteNumber(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function setStatus(state, label) {
@@ -543,17 +553,36 @@ function setStatus(state, label) {
 // ── Packet handler ───────────────────────────────────────────────────────────
 function handlePacket(p) {
   if (p.type === 'welcome') {
-    if (p.speed_scale !== undefined) syncSpeed(Math.round(p.speed_scale * 100));
+    if (p.speed_max !== undefined) {
+      const parsedMax = Number(p.speed_max);
+      if (Number.isFinite(parsedMax) && parsedMax > 0) speedScaleMax = parsedMax;
+    }
+    if (p.speed_scale !== undefined) {
+      const parsedScale = Number(p.speed_scale);
+      if (Number.isFinite(parsedScale)) {
+        syncSpeed(Math.round((parsedScale / speedScaleMax) * 100));
+      }
+    }
   }
   if (p.type === 'imu') {
+    const ax = toFiniteNumber(p.ax);
+    const ay = toFiniteNumber(p.ay);
+    const az = toFiniteNumber(p.az);
+    // Accept both compact and verbose key names for compatibility.
+    const gx = toFiniteNumber(p.gx ?? p.gyro_x_rads, 0);
+    const gy = toFiniteNumber(p.gy ?? p.gyro_y_rads, 0);
+    const gz = toFiniteNumber(p.gz ?? p.gyro_z_rads, 0);
+    const pitchDeg = toFiniteNumber(p.pitch_deg ?? p.pitch, 0);
+    const rollDeg  = toFiniteNumber(p.roll_deg  ?? p.roll, 0);
+
     // Accel
-    setImu('ax', p.ax, 20);
-    setImu('ay', p.ay, 20);
-    setImu('az', p.az, 20);
+    setImu('ax', ax, 20);
+    setImu('ay', ay, 20);
+    setImu('az', az, 20);
     // Gyro
-    setImu('gx', p.gx, 10, 3);
-    setImu('gy', p.gy, 10, 3);
-    setImu('gz', p.gz, 10, 3);
+    setImu('gx', gx, 10, 3);
+    setImu('gy', gy, 10, 3);
+    setImu('gz', gz, 10, 3);
 
     // Badge colour
     const badge = document.getElementById('imuBadge');
@@ -561,10 +590,8 @@ function handlePacket(p) {
 
     // State estimate — bar scale matches SPHERE_ESTOP_PITCH_DEG (30°)
     // 'hot' highlight triggers at ±15° (50% of estop threshold)
-    if (p.pitch_deg !== undefined) {
-      setImu('estPitch', parseFloat(p.pitch_deg), 30, 1);
-      setImu('estRoll',  parseFloat(p.roll_deg),  30, 1);
-    }
+    setImu('estPitch', pitchDeg, 30, 1);
+    setImu('estRoll',  rollDeg,  30, 1);
 
     document.getElementById('imuStatus').textContent  = p.valid ? 'OK' : 'ERR';
     document.getElementById('uptime').textContent     = fmtUptime(p.uptime_ms);
@@ -576,16 +603,24 @@ function handlePacket(p) {
 function setImu(id, val, maxAbs, decimals = 2) {
   const el  = document.getElementById(id);
   const bar = document.getElementById(id + 'Bar');
+  const n   = toFiniteNumber(val, NaN);
 
-  const formatted = val.toFixed(decimals);
+  if (!Number.isFinite(n)) {
+    el.textContent = '—';
+    el.classList.remove('hot');
+    if (bar) bar.style.width = '50%';
+    return;
+  }
+
+  const formatted = n.toFixed(decimals);
   el.textContent = formatted;
 
   // Highlight if magnitude > 50% of scale
-  el.classList.toggle('hot', Math.abs(val) > maxAbs * 0.5);
+  el.classList.toggle('hot', Math.abs(n) > maxAbs * 0.5);
 
   // Bar: maps [-maxAbs, +maxAbs] → [0%, 100%], centred at 50%
   if (bar) {
-    const pct = 50 + (val / maxAbs) * 50;
+    const pct = 50 + (n / maxAbs) * 50;
     bar.style.width = Math.min(100, Math.max(0, pct)) + '%';
   }
 }
@@ -697,7 +732,7 @@ function sendStop() {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send('CMD:STOP');
 }
 
-NEW:
+let speedScaleMax = 1.0; // Updated from welcome packet (firmware DRIVE_SPEED_MAX)
 // ── Speed control ─────────────────────────────────────────────────────────────
 function applySpeed(pct) {
   const v = Math.min(100, Math.max(0, Math.round(pct)));
@@ -705,7 +740,7 @@ function applySpeed(pct) {
   document.getElementById('speedInput').value         = v;
   document.getElementById('speedBadge').textContent   = v + '%';
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send('CMD:SPEED:v=' + (v / 100).toFixed(2));
+    ws.send('CMD:SPEED:v=' + ((v / 100) * speedScaleMax).toFixed(3));
   }
 }
 
@@ -799,26 +834,29 @@ void WebComm::update() {
     _ws.cleanupClients();
 }
 
-// ── REPLACE the entire broadcastIMU() function with this ─────────────────────
-
 void WebComm::broadcastState(const RawIMUData& raw, const IMUState& est) {
     if (_ws.count() == 0) return;
 
+    // safeF: prevents NaN/Inf from entering the JSON stream.
+    // Either would cause JSON.parse to throw in the browser, silently
+    // dropping updates for that packet.
+    auto safeF = [](float v, int dec) -> String {
+        if (std::isnan(v) || std::isinf(v)) return String("0");
+        return String(v, dec);
+    };
+
     JsonDocument doc;
     doc["type"]      = "imu";
-    // Raw IMU
-    doc["ax"]        = serialized(String(raw.accel_x_ms2, 3));
-    doc["ay"]        = serialized(String(raw.accel_y_ms2, 3));
-    doc["az"]        = serialized(String(raw.accel_z_ms2, 3));
-    doc["gx"]        = serialized(String(raw.gyro_x_rads, 4));
-    doc["gy"]        = serialized(String(raw.gyro_y_rads, 4));
-    doc["gz"]        = serialized(String(raw.gyro_z_rads, 4));
+    doc["ax"]        = serialized(safeF(raw.accel_x_ms2, 3));
+    doc["ay"]        = serialized(safeF(raw.accel_y_ms2, 3));
+    doc["az"]        = serialized(safeF(raw.accel_z_ms2, 3));
+    doc["gx"]        = serialized(safeF(raw.gyro_x_rads, 4));
+    doc["gy"]        = serialized(safeF(raw.gyro_y_rads, 4));
+    doc["gz"]        = serialized(safeF(raw.gyro_z_rads, 4));
     doc["valid"]     = raw.valid;
-    // State estimate
-    doc["pitch_deg"] = serialized(String(est.pitch_deg, 1));
-    doc["roll_deg"]  = serialized(String(est.roll_deg,  1));
+    doc["pitch_deg"] = serialized(safeF(est.pitch_deg, 1));
+    doc["roll_deg"]  = serialized(safeF(est.roll_deg,  1));
     doc["est_valid"] = est.valid;
-    // System
     doc["uptime_ms"] = millis();
     doc["clients"]   = (uint8_t)_ws.count();
 
@@ -906,9 +944,9 @@ void WebComm::_parseCommand(const char* msg, size_t len) {
     }
 
     if (strncmp(msg, "CMD:SPEED:", 10) == 0) {
-        float v = 0.5f;
+        float v = DRIVE_SPEED_DEFAULT;
         if (sscanf(msg + 10, "v=%f", &v) == 1) {
-            v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+            v = v < 0.0f ? 0.0f : (v > DRIVE_SPEED_MAX ? DRIVE_SPEED_MAX : v);
             if (_speedCb) _speedCb(v);
             _currentSpeed = v;
         } else {
@@ -941,7 +979,9 @@ void WebComm::_sendWelcome(AsyncWebSocketClient* client) {
     doc["version"]     = "BB8-v1";
     doc["ip"]          = ipAddress();
     doc["speed_scale"] = _currentSpeed;
+    doc["speed_max"]   = DRIVE_SPEED_MAX;
     String out;
     serializeJson(doc, out);
     client->text(out);
 }
+
