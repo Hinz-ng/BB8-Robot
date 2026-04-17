@@ -39,4 +39,29 @@ constexpr uint8_t CTRL3_BDU       = 0x40; // block data update
 // SPI framing
 constexpr uint8_t SPI_READ_MASK   = 0x80;
 
+// ── SFLP (Sensor Fusion Low Power) ───────────────────────────────────────────
+// On-chip game rotation vector fusion (accel + gyro, no magnetometer).
+// Outputs 3 half-precision floats: qx, qy, qz. qw reconstructed from these.
+//
+// ⚠  Addresses sourced from LSM6DSV16XTR reference driver rev 2.x and AN5763.
+//    If readSFLP() returns a constant identity quaternion, verify these first.
+
+// Main register page — gates access to embedded function register page
+constexpr uint8_t FUNC_CFG_ACCESS           = 0x01;
+constexpr uint8_t EMBEDDED_FUNC_REG_ACCESS  = 0x40;  // bit 6; write to enable page
+
+// Embedded function page — only accessible when EMBEDDED_FUNC_REG_ACCESS set
+constexpr uint8_t EMB_FUNC_EN_A             = 0x04;  // embedded page
+constexpr uint8_t SFLP_GAME_EN              = 0x04;  // bit 2 of EMB_FUNC_EN_A
+
+// SFLP output data rate — embedded page
+// ⚠  Register address unverified on all silicon revisions — confirm vs datasheet
+constexpr uint8_t SFLP_ODR_REG             = 0x5E;  // embedded page
+constexpr uint8_t SFLP_ODR_120HZ           = 0x06;  // bits[3:1]=011 → 120 Hz
+
+// SFLP output registers — embedded page; 6 bytes (3 × float16): qx, qy, qz
+// ⚠  Verify base address against datasheet before first use
+constexpr uint8_t SFLP_GAME_ROTATION_VECTOR_L = 0x6B;  // embedded page
+
 } // namespace LSM6DSV
+

@@ -230,6 +230,41 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     margin: 14px 0;
   }
 
+NEW:
+  /* ── Speed control ──────────────────────────────────────── */
+  .speed-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 0;
+  }
+  .speed-row input[type="range"] {
+    flex: 1;
+    height: 4px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .speed-number {
+    width: 56px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    padding: 6px 4px;
+    -moz-appearance: textfield;
+  }
+  .speed-number::-webkit-inner-spin-button,
+  .speed-number::-webkit-outer-spin-button { -webkit-appearance: none; }
+  .speed-pct-label {
+    font-size: 12px;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+
   /* ── Joystick pad ────────────────────────────────────────── */
   .joystick-wrap {
     display: flex;
@@ -401,6 +436,27 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </div><!-- /imuBody -->
 </div>
 
+<!-- Speed Panel (collapsible) -->
+<div class="card" id="speedCard">
+  <div class="card-header" onclick="toggleCard('speedCard')">
+    <div class="card-title">
+      Speed
+      <span class="badge" id="speedBadge">50%</span>
+    </div>
+    <div class="chevron open" id="speedChevron">▾</div>
+  </div>
+  <div class="card-body open" id="speedBody">
+    <div class="speed-row">
+      <span class="speed-pct-label">0%</span>
+      <input type="range" id="speedSlider" min="0" max="100" value="50" step="1">
+      <span class="speed-pct-label">100%</span>
+      <input type="number" class="speed-number" id="speedInput"
+             min="0" max="100" value="50">
+      <span class="speed-pct-label">%</span>
+    </div>
+  </div>
+</div>
+
 <!-- Drive Panel (collapsible) -->
 <div class="card" id="driveCard">
   <div class="card-header" onclick="toggleCard('driveCard')">
@@ -486,6 +542,9 @@ function setStatus(state, label) {
 
 // ── Packet handler ───────────────────────────────────────────────────────────
 function handlePacket(p) {
+  if (p.type === 'welcome') {
+    if (p.speed_scale !== undefined) syncSpeed(Math.round(p.speed_scale * 100));
+  }
   if (p.type === 'imu') {
     // Accel
     setImu('ax', p.ax, 20);
@@ -637,6 +696,30 @@ function sendStop() {
   clearTimeout(sendTimer);
   if (ws && ws.readyState === WebSocket.OPEN) ws.send('CMD:STOP');
 }
+
+NEW:
+// ── Speed control ─────────────────────────────────────────────────────────────
+function applySpeed(pct) {
+  const v = Math.min(100, Math.max(0, Math.round(pct)));
+  document.getElementById('speedSlider').value        = v;
+  document.getElementById('speedInput').value         = v;
+  document.getElementById('speedBadge').textContent   = v + '%';
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send('CMD:SPEED:v=' + (v / 100).toFixed(2));
+  }
+}
+
+function syncSpeed(pct) {
+  // Sync UI only — does NOT send CMD:SPEED. Used on welcome packet to avoid
+  // echoing the value back to the server it just sent us.
+  const v = Math.min(100, Math.max(0, Math.round(pct)));
+  document.getElementById('speedSlider').value       = v;
+  document.getElementById('speedInput').value        = v;
+  document.getElementById('speedBadge').textContent  = v + '%';
+}
+
+document.getElementById('speedSlider').addEventListener('input',  e => applySpeed(+e.target.value));
+document.getElementById('speedInput').addEventListener('change', e => applySpeed(+e.target.value));
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 drawJoy();
@@ -822,6 +905,18 @@ void WebComm::_parseCommand(const char* msg, size_t len) {
         return;
     }
 
+    if (strncmp(msg, "CMD:SPEED:", 10) == 0) {
+        float v = 0.5f;
+        if (sscanf(msg + 10, "v=%f", &v) == 1) {
+            v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+            if (_speedCb) _speedCb(v);
+            _currentSpeed = v;
+        } else {
+            Serial.printf("[WEBCOMM] Malformed SPEED command: %s\n", msg);
+        }
+        return;
+    }
+
     if (strncmp(msg, "CMD:DRIVE:", 10) == 0) {
         float x = 0.0f, y = 0.0f;
         // sscanf is safe here — buf is null-terminated and bounded
@@ -842,9 +937,10 @@ void WebComm::_parseCommand(const char* msg, size_t len) {
 // Sent immediately on connect so the UI doesn't wait for the next broadcast tick
 void WebComm::_sendWelcome(AsyncWebSocketClient* client) {
     JsonDocument doc;
-    doc["type"]    = "welcome";
-    doc["version"] = "BB8-v1";
-    doc["ip"]      = ipAddress();
+    doc["type"]        = "welcome";
+    doc["version"]     = "BB8-v1";
+    doc["ip"]          = ipAddress();
+    doc["speed_scale"] = _currentSpeed;
     String out;
     serializeJson(doc, out);
     client->text(out);

@@ -19,10 +19,12 @@
 #include "webcomm.h"
 #include "project_wide_defs.h"
 #include "state_estimator.h"
+#include "motion_controller.h"
 
 // ── Global module instances ───────────────────────────────────────────────────
 IMU            imu;
-StateEstimator stateEstimator;   // ← ADD
+StateEstimator stateEstimator;
+MotionController motionController;
 WebComm        webcomm;
 
 // ── Interval helper ───────────────────────────────────────────────────────────
@@ -56,10 +58,19 @@ void setup() {
         Serial.println("[BOOT] WARNING: Calibration failed. Proceeding uncalibrated.");
     }
 
+    // ── Layer 3: MotionController ─────────────────────────────────────────────
+    if (!motionController.begin()) {
+        Serial.println("[BOOT] WARNING: MotionController init failed. Servos disabled.");
+    }
+
     // ── Layer 7: WebComm ─────────────────────────────────────────────────────
     webcomm.setDriveCallback([](float vx, float vy) {
-        // TODO Phase 5: route through motionManager.submit(SOURCE_UI, {vx, vy})
-        Serial.printf("[DRIVE] vel_x=%.3f  vel_y=%.3f\n", vx, vy);
+        motionController.setDrive(vx, vy);
+    });
+
+    webcomm.setSpeedCallback([](float scale) {
+        motionController.setSpeedScale(scale);
+        webcomm.setCurrentSpeed(scale);  // keep welcome packet in sync
     });
 
     // AP-first: pass empty strings → webcomm.begin() goes straight to AP mode.
@@ -76,18 +87,14 @@ void loop() {
     constexpr uint32_t BROADCAST_MS = 1000 / WEBCOMM_BROADCAST_HZ;
     uint32_t now = millis();
 
-     // ── Layer 1: IMU read every tick ─────────────────────────────────────────
+    // ── Layer 1: IMU raw read (telemetry only) ────────────────────────────────
     RawIMUData data = imu.read();
 
-    // ── Layer 2: state estimate every tick ───────────────────────────────────
-    IMUState est = stateEstimator.update(data);   // ← ADD
+    // ── Layer 1: SFLP quaternion read ────────────────────────────────────────
+    SFLPData sflp = imu.readSFLP();
 
-    if (!data.valid) {
-        static uint32_t lastWarn = 0;
-        if (every(lastWarn, now, 1000)) {
-            Serial.println("[LOOP] IMU read invalid");
-        }
-    }
+    // ── Layer 2: quaternion → pitch/roll ─────────────────────────────────────
+    IMUState est = stateEstimator.update(sflp);
 
     // ── Layer 7: broadcast at WEBCOMM_BROADCAST_HZ ──────────────────────────
     if (every(lastBroadcast, now, BROADCAST_MS)) {

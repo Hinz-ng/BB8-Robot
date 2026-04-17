@@ -19,7 +19,9 @@
 // ── Command callbacks ─────────────────────────────────────────────────────────
 // Drive callback: vel_x and vel_y in range [-1.0, +1.0]
 // Register via setDriveCallback() before calling begin()
-using DriveCallback = std::function<void(float vel_x, float vel_y)>;
+using DriveCallback  = std::function<void(float vel_x, float vel_y)>;
+// Speed callback: scale in [0.0, 1.0] — called when UI slider changes
+using SpeedCallback  = std::function<void(float scale)>;
 
 // ── Telemetry packet ──────────────────────────────────────────────────────────
 // Snapshot assembled each broadcast tick and sent to all connected clients
@@ -55,6 +57,10 @@ public:
     // Register before begin() — called when a drive command arrives from UI
     // If not registered, drive commands are silently dropped
     void setDriveCallback(DriveCallback cb) { _driveCb = cb; }
+    void setSpeedCallback(SpeedCallback  cb) { _speedCb = cb; }
+
+    // Current speed scale (0.0–1.0) — sent in welcome packet for UI sync on connect
+    void setCurrentSpeed(float s) { _currentSpeed = s; }
 
     // True once WiFi is associated and server is listening
     bool isConnected() const { return _connected; }
@@ -69,6 +75,8 @@ private:
     AsyncWebServer  _server{80};
     AsyncWebSocket  _ws{"/ws"};
     DriveCallback   _driveCb;
+    SpeedCallback   _speedCb;
+    float           _currentSpeed{0.5f}; // mirrored from MotionController for welcome packet
     bool            _connected{false};
 
     // WebSocket event handler — static trampoline into instance method

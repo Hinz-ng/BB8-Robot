@@ -1,73 +1,84 @@
 // module:  state_estimator.cpp
 // layer:   2 — sensor fusion; pure computation, no hardware I/O
-// purpose: complementary filter for pitch + roll angle estimates
+// purpose: gravity vector extraction from SFLP quaternion → pitch + roll
 // date:    2025
+//
+// NOTE: Arduino.h intentionally excluded — this layer has no hardware I/O.
+//       Arduino.h defines RAD_TO_DEG as a macro; use kRadToDeg below.
 
 #include "state_estimator.h"
-#include <cmath>  // atan2f, sqrtf — explicit, not via Arduino.h
-
-// NOTE: Arduino.h is intentionally excluded. Layer 2 has no hardware I/O.
-// It also defines RAD_TO_DEG as a macro which collides with any local constant
-// of the same name. Use kRadToDeg below instead.
+#include <cmath>   // atan2f, sqrtf
 
 // ── update ────────────────────────────────────────────────────────────────────
-IMUState StateEstimator::update(const RawIMUData& raw) {
-    if (!raw.valid) {
+IMUState StateEstimator::update(const SFLPData& sflp) {
+    if (!sflp.valid) {
         _state.valid = false;
         return _state;
     }
 
-    const float ap = accelPitch(raw);
-    const float ar = accelRoll(raw);
+    // ── Gravity vector extraction ─────────────────────────────────────────────
+    // Extract the "world up" direction in the current chip frame.
+    // This equals Rᵀ * world_up_at_boot, where world_up_at_boot is the chip
+    // axis that was aligned with gravity when SFLP initialised.
+    //
+    // For unit quaternion q=(qw,qx,qy,qz) representing body-to-world rotation,
+    // the rotation matrix R has rows:
+    //   R₁ = [1−2(qy²+qz²),  2(qxqy−qwqz),  2(qxqz+qwqy)]
+    //   R₂ = [2(qxqy+qwqz),  1−2(qx²+qz²),  2(qyqz−qwqx)]
+    //   R₃ = [2(qxqz−qwqy),  2(qyqz+qwqx),  1−2(qx²+qy²)]
+    //
+    // g_chip = Rᵀ * world_up_at_boot
+    //   STANDARD       (Z=up):  world_up=[0,0,1] → g = R₃
+    //   Z_FORWARD_Y_UP (Y=up):  world_up=[0,1,0] → g = R₂
+    //   Z_FORWARD_X_UP (X=up):  world_up=[1,0,0] → g = R₁
+    //
+    // Pitch/roll signs verified algebraically against small-angle test
+    // quaternions (rotation about each axis by angle θ, confirmed θ recovered).
+    // ─────────────────────────────────────────────────────────────────────────
 
-    if (!_initialized) {
-        // Seed from accel on the very first call — no gyro integration yet.
-        // Prevents the large transient you would otherwise see while the
-        // filter converges from zero toward the true angle.
-        _state.pitch_rad = ap;
-        _state.roll_rad  = ar;
-        _initialized     = true;
-    } else {
-        // Complementary filter:
-        //   Gyro term:  fast, low-noise, but drifts over time
-        //   Accel term: drift-free, but noisy and sensitive to linear accel
-        //
-        //   CF_ALPHA ≈ 0.98 (from project_wide_defs.h) → gyro dominates for
-        //   short transients; accel corrects drift over ~0.5 s time constant.
-        //
-        //   Recalculate CF_ALPHA if IMU_LOOP_HZ changes:
-        //     alpha ≈ 1 - (1 / (tau_sec * IMU_LOOP_HZ))   [tau = 0.5 s]
-        _state.pitch_rad = CF_ALPHA * (_state.pitch_rad + raw.gyro_y_rads * DT_S)
-                         + (1.0f - CF_ALPHA) * ap;
+    const float qw = sflp.qw, qx = sflp.qx, qy = sflp.qy, qz = sflp.qz;
+    float gx, gy, gz;
 
-        _state.roll_rad  = CF_ALPHA * (_state.roll_rad  + raw.gyro_x_rads * DT_S)
-                         + (1.0f - CF_ALPHA) * ar;
+    switch (IMU_MOUNTING) {
+
+    case IMUMounting::STANDARD:
+        // Chip Z = up at boot → g = R₃
+        gx = 2.0f*(qx*qz - qw*qy);
+        gy = 2.0f*(qy*qz + qw*qx);
+        gz = 1.0f - 2.0f*(qx*qx + qy*qy);
+        // pitch: forward=X, up=Z → atan2(-gx, gz)
+        // roll:  left=Y,    up=Z → atan2( gy, gz)
+        _state.pitch_rad = atan2f(-gx, gz);
+        _state.roll_rad  = atan2f( gy, gz);
+        break;
+
+    case IMUMounting::Z_FORWARD_Y_UP:
+        // Chip Y = up at boot → g = R₂
+        gx = 2.0f*(qx*qy + qw*qz);
+        gy = 1.0f - 2.0f*(qx*qx + qz*qz);
+        gz = 2.0f*(qy*qz - qw*qx);
+        // pitch: forward=Z, up=Y → atan2(-gz, gy)
+        // roll:  left=X,   up=Y → atan2( gx, gy)
+        _state.pitch_rad = atan2f(-gz, gy);
+        _state.roll_rad  = atan2f( gx, gy);
+        break;
+
+    case IMUMounting::Z_FORWARD_X_UP:
+        // Chip X = up at boot → g = R₁
+        gx = 1.0f - 2.0f*(qy*qy + qz*qz);
+        gy = 2.0f*(qx*qy - qw*qz);
+        gz = 2.0f*(qx*qz + qw*qy);
+        // pitch: forward=Z, up=X → atan2(-gz, gx)
+        // roll:  right=Y (so left=−Y), up=X → atan2(-gy, gx)
+        _state.pitch_rad = atan2f(-gz, gx);
+        _state.roll_rad  = atan2f(-gy, gx);
+        break;
     }
 
-    // Degree copies for telemetry and PD controller readability.
-    // kRadToDeg is named to avoid collision with Arduino.h's RAD_TO_DEG macro.
+    // kRadToDeg: named to avoid collision with Arduino.h's RAD_TO_DEG macro
     constexpr float kRadToDeg = 180.0f / 3.14159265f;
     _state.pitch_deg = _state.pitch_rad * kRadToDeg;
     _state.roll_deg  = _state.roll_rad  * kRadToDeg;
     _state.valid     = true;
-
     return _state;
-}
-
-// ── accelPitch ────────────────────────────────────────────────────────────────
-// Tilt about Y axis from accel alone: atan2(-ax, sqrt(ay² + az²))
-// Zero when ax=0, az=+g (upright, Z pointing up). Positive = nose up.
-// AXIS DEPENDENCY: ax=forward, az=up at rest. Verify Serial print before use.
-float StateEstimator::accelPitch(const RawIMUData& d) {
-    const float denom = sqrtf(d.accel_y_ms2 * d.accel_y_ms2
-                             + d.accel_z_ms2 * d.accel_z_ms2);
-    return atan2f(-d.accel_x_ms2, denom);
-}
-
-// ── accelRoll ─────────────────────────────────────────────────────────────────
-// Tilt about X axis from accel alone: atan2(ay, az)
-// Zero when ay=0, az=+g (upright). Positive = right side down.
-// AXIS DEPENDENCY: ay=left, az=up at rest. Verify Serial print before use.
-float StateEstimator::accelRoll(const RawIMUData& d) {
-    return atan2f(d.accel_y_ms2, d.accel_z_ms2);
 }
