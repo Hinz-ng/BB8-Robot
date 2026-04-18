@@ -26,41 +26,21 @@ struct IMUCalibration {
     bool  calibrated;
 };
 
-struct SFLPData {
-    float qw;    // reconstructed scalar component: sqrt(1 − qx²−qy²−qz²)
-    float qx;    // x vector component
-    float qy;    // y vector component
-    float qz;    // z vector component
-    bool  valid; // false if SPI failed or qw² < 0 (float16 rounding edge case)
-};
-
 class IMU {
 public:
-    bool          begin();   // init SPI, verify WHO_AM_I, configure ODR/FS
-    bool          calibrate(uint16_t samples = 200); // gyro bias collection
-    RawIMUData    read();    // burst-read, apply bias, return calibrated data
+    bool          begin();
+    bool          calibrate(uint16_t samples = 200);
+    RawIMUData    read();
 
     const IMUCalibration& getCalibration() const { return _cal; }
 
-    bool     enableSFLP();  // called once inside begin() — do not call separately
-    SFLPData readSFLP();    // burst-read 6 bytes, decode float16, reconstruct qw
-
-    void debugDump();
-    
 private:
     uint8_t  spiRead8(uint8_t reg);
     void     spiBurstRead(uint8_t reg, uint8_t* buf, uint8_t len);
     void     spiWrite8(uint8_t reg, uint8_t val);
 
-    // Decodes IEEE 754 half-precision (float16) to float32.
-    // SFLP game rotation vector components are stored as float16 in hardware.
-    static float float16ToFloat32(uint16_t h);
-
     IMUCalibration _cal{};
 
-    // Sensitivity constants (datasheet Table 2)
-    // FS=±4g  → 0.122 mg/LSB → 0.122e-3 * 9.81 m/s²/LSB
     static constexpr float ACCEL_SENS_MS2 = 0.122e-3f * 9.81f;
-    // FS=±500dps → 17.50 mdps/LSB → * π/180 / 1000
     static constexpr float GYRO_SENS_RADS = 17.50e-3f * (3.14159265f / 180.0f);
 };

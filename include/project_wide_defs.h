@@ -51,7 +51,7 @@ constexpr uint32_t OE_BOOT_HOLD_MS = 1000; // hold outputs disabled at boot
 // ── Complementary Filter ─────────────────────────────────────────────────────
 // DEPRECATED — replaced by LSM6DSV16XTR SFLP on-chip fusion (Phase 4+).
 // Retained for reference. Remove when SFLP is confirmed stable on hardware.
-// constexpr float CF_ALPHA = 0.98f;
+constexpr float CF_ALPHA = 0.98f;
 
 // ── Sphere Controller ────────────────────────────────────────────────────────
 constexpr float SPHERE_KP_PITCH   = 0.0f; // tune after bringup

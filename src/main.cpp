@@ -91,11 +91,7 @@ void loop() {
     // ── Layer 1: IMU raw read (telemetry only) ────────────────────────────────
     RawIMUData data = imu.read();
 
-    // ── Layer 1: SFLP quaternion read ────────────────────────────────────────
-    SFLPData sflp = imu.readSFLP();
-
-    // ── Layer 2: quaternion → pitch/roll ─────────────────────────────────────
-    IMUState est = stateEstimator.update(sflp);
+    IMUState est = stateEstimator.update(data);
 
     // ── Layer 7: broadcast at WEBCOMM_BROADCAST_HZ ──────────────────────────
     if (every(lastBroadcast, now, BROADCAST_MS)) {
@@ -118,27 +114,10 @@ void loop() {
                           est.pitch_deg, est.roll_deg,
                           webcomm.clientCount());
         }
-
-        // ── SFLP diagnostic — REMOVE once SFLP confirmed working ─────────────
-        Serial.printf("SFLP qw:%6.3f qx:%6.3f qy:%6.3f qz:%6.3f valid:%d\n",
-                      sflp.qw, sflp.qx, sflp.qy, sflp.qz, sflp.valid);
-    }
-
-    static uint32_t lastDebug = 0;
-
-if (millis() - lastDebug > 1000) {
-    imu.debugDump();
-    lastDebug = millis();
 }
-RawIMUData d = imu.read();
-
-Serial.printf("GYRO RAW: %.5f %.5f %.5f | ACTIVE:%d\n",
-              d.gyro_x_rads,
-              d.gyro_y_rads,
-              d.gyro_z_rads,
-              !(d.gyro_x_rads == 0 && d.gyro_y_rads == 0 && d.gyro_z_rads == 0));
 
 }
+
 
 
 
