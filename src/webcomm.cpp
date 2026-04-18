@@ -854,8 +854,8 @@ void WebComm::broadcastState(const RawIMUData& raw, const IMUState& est) {
     doc["gy"]        = serialized(safeF(raw.gyro_y_rads, 4));
     doc["gz"]        = serialized(safeF(raw.gyro_z_rads, 4));
     doc["valid"]     = raw.valid;
-    doc["pitch_deg"] = serialized(safeF(est.pitch_deg, 1));
-    doc["roll_deg"]  = serialized(safeF(est.roll_deg,  1));
+    doc["pitch_deg"] = est.valid ? serialized(safeF(est.pitch_deg, 1)) : serialized(String("null"));
+    doc["roll_deg"]  = est.valid ? serialized(safeF(est.roll_deg,  1)) : serialized(String("null"));
     doc["est_valid"] = est.valid;
     doc["uptime_ms"] = millis();
     doc["clients"]   = (uint8_t)_ws.count();

@@ -29,9 +29,9 @@ constexpr int PIN_SERVO_HEAD_TILT = 7;
 constexpr int LEDC_FREQ_HZ         = 50;   // Hz — standard servo PWM
 constexpr int LEDC_RESOLUTION_BITS = 14;   // 14-bit: 0–16383
 // At 50 Hz, 14-bit: 1 tick ≈ 1.22 µs  (period = 20 ms / 16384)
-constexpr int SERVO_PULSE_MIN_US   = 500; // µs — full speed one direction
+constexpr int SERVO_PULSE_MIN_US   = 1000; // µs — full speed one direction
 constexpr int SERVO_PULSE_MID_US   = 1500; // µs — neutral / stop
-constexpr int SERVO_PULSE_MAX_US   = 2500; // µs — full speed other direction
+constexpr int SERVO_PULSE_MAX_US   = 2000; // µs — full speed other direction
 
 // ── Drive servo mounting flags ────────────────────────────────────────────────
 // Set true for any wheel that spins the wrong direction during bringup.

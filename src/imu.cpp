@@ -125,24 +125,25 @@ void IMU::spiWrite8(uint8_t reg, uint8_t val) {
 }
 
 bool IMU::enableSFLP() {
-    // 1. Switch to embedded function register page
     spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, LSM6DSV::EMBEDDED_FUNC_REG_ACCESS);
-    delay(1);
+    delay(2);  // was 1ms — some silicon revisions need more settling
 
-    // 2. Enable SFLP computation — read-modify-write to preserve other EN_A bits
     uint8_t ena = spiRead8(LSM6DSV::EMB_FUNC_EN_A);
     spiWrite8(LSM6DSV::EMB_FUNC_EN_A, ena | LSM6DSV::SFLP_GAME_EN);
 
-    // 3. Set SFLP output rate to 120 Hz (closest standard rate above 100 Hz loop)
-    //    ⚠  If SFLP_ODR_REG address is wrong, this write is a no-op and SFLP
-    //       defaults to ~60 Hz — still functional, just slightly lower rate
-    spiWrite8(LSM6DSV::SFLP_ODR_REG, LSM6DSV::SFLP_ODR_120HZ);
+    // Read back and verify bit 2 was actually set
+    uint8_t verify = spiRead8(LSM6DSV::EMB_FUNC_EN_A);
+    if (!(verify & LSM6DSV::SFLP_GAME_EN)) {
+        spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, 0x00);
+        Serial.printf("[IMU] SFLP enable FAILED — EMB_FUNC_EN_A readback=0x%02X\n", verify);
+        return false;
+    }
 
-    // 4. Return to main register page before leaving
+    spiWrite8(LSM6DSV::SFLP_ODR_REG, LSM6DSV::SFLP_ODR_120HZ);
     spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, 0x00);
 
-    delay(10); // SFLP DSP startup settling — not documented; conservative margin
-    Serial.println("[IMU] SFLP game rotation vector enabled (120 Hz)");
+    delay(15);  // was 10ms — SFLP DSP startup
+    Serial.printf("[IMU] SFLP enabled. EMB_FUNC_EN_A=0x%02X\n", verify);
     return true;
 }
 
@@ -150,8 +151,8 @@ SFLPData IMU::readSFLP() {
     SFLPData out{};
     uint8_t buf[6];
 
-    // Page-switch, burst-read, page-restore — 3 SPI transactions per call
     spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, LSM6DSV::EMBEDDED_FUNC_REG_ACCESS);
+    delayMicroseconds(10); // brief settling after page switch
     spiBurstRead(LSM6DSV::SFLP_GAME_ROTATION_VECTOR_L, buf, 6);
     spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, 0x00);
 
@@ -164,25 +165,33 @@ SFLPData IMU::readSFLP() {
     out.qy = float16ToFloat32(hy);
     out.qz = float16ToFloat32(hz);
 
-    // Reconstruct qw from unit-quaternion constraint: qw = sqrt(1 − |q_vec|²)
-    // qw² can go slightly negative due to float16 rounding — clamp and flag.
-    // Guard NaN in vector components first — float16 0xFFFF decodes to NaN.
-// NaN comparisons always return false, so the qw2 < 0 check alone is blind to them.
-if (std::isnan(out.qx) || std::isnan(out.qy) || std::isnan(out.qz)) {
-    out.qx = out.qy = out.qz = 0.0f;
-    out.qw    = 1.0f;
-    out.valid = false;   // identity quaternion; SFLP not yet producing data
-    return out;
-}
+    // Guard 1: NaN from float16(0xFFFF) — uninitialized or SPI fault
+    if (std::isnan(out.qx) || std::isnan(out.qy) || std::isnan(out.qz)) {
+        out.qx = out.qy = out.qz = 0.0f;
+        out.qw    = 1.0f;
+        out.valid = false;
+        return out;
+    }
 
-float qw2 = 1.0f - (out.qx*out.qx + out.qy*out.qy + out.qz*out.qz);
-if (qw2 < 0.0f) {
-    out.qw    = 1.0f;   // clamp to identity rather than 0 — avoids degenerate state
-    out.valid = false;
-} else {
-    out.qw    = sqrtf(qw2);
-    out.valid = true;
-}
+    // Guard 2: Identity quaternion from float16(0x0000) — wrong register address
+    // or SFLP not yet outputting fusion data.
+    // A real orientation will always have at least one non-zero vector component
+    // unless the robot is in exact boot pose (which can't persist through motion).
+    // We accept identity only for the first SFLP_WARMUP_TICKS ticks, then flag invalid.
+    if (hx == 0x0000 && hy == 0x0000 && hz == 0x0000) {
+        out.qw    = 1.0f;
+        out.valid = false;  // register address wrong, or SFLP not yet running
+        return out;
+    }
+
+    float qw2 = 1.0f - (out.qx*out.qx + out.qy*out.qy + out.qz*out.qz);
+    if (qw2 < 0.0f) {
+        out.qw    = 1.0f;
+        out.valid = false;
+    } else {
+        out.qw    = sqrtf(qw2);
+        out.valid = true;
+    }
 
     return out;
 }
@@ -215,3 +224,4 @@ float IMU::float16ToFloat32(uint16_t h) {
     memcpy(&result, &bits, sizeof(float));  // type-pun via memcpy — UB-safe
     return result;
 }
+

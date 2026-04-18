@@ -118,5 +118,9 @@ void loop() {
                           est.pitch_deg, est.roll_deg,
                           webcomm.clientCount());
         }
+
+        // ── SFLP diagnostic — REMOVE once SFLP confirmed working ─────────────
+        Serial.printf("SFLP qw:%6.3f qx:%6.3f qy:%6.3f qz:%6.3f valid:%d\n",
+                      sflp.qw, sflp.qx, sflp.qy, sflp.qz, sflp.valid);
     }
 }
