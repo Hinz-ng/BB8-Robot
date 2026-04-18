@@ -123,4 +123,22 @@ void loop() {
         Serial.printf("SFLP qw:%6.3f qx:%6.3f qy:%6.3f qz:%6.3f valid:%d\n",
                       sflp.qw, sflp.qx, sflp.qy, sflp.qz, sflp.valid);
     }
+
+    static uint32_t lastDebug = 0;
+
+if (millis() - lastDebug > 1000) {
+    imu.debugDump();
+    lastDebug = millis();
 }
+RawIMUData d = imu.read();
+
+Serial.printf("GYRO RAW: %.5f %.5f %.5f | ACTIVE:%d\n",
+              d.gyro_x_rads,
+              d.gyro_y_rads,
+              d.gyro_z_rads,
+              !(d.gyro_x_rads == 0 && d.gyro_y_rads == 0 && d.gyro_z_rads == 0));
+
+}
+
+
+

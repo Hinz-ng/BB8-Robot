@@ -20,6 +20,10 @@ constexpr uint8_t STATUS_REG    = 0x1E;
 constexpr uint8_t STATUS_XLDA   = 0x01; // accel data ready
 constexpr uint8_t STATUS_GDA    = 0x02; // gyro  data ready
 
+// explicitly enable gyro via CTRL10 — required for SFLP to work, even if gyro ODR/FS set
+constexpr uint8_t CTRL10 = 0x19;
+constexpr uint8_t GYRO_ENABLE = 0x20;  // bit 5
+
 // Output registers (burst-readable, 6 bytes each)
 constexpr uint8_t OUTX_L_G      = 0x22; // gyro  X low
 constexpr uint8_t OUTX_L_A      = 0x28; // accel X low
@@ -62,6 +66,21 @@ constexpr uint8_t SFLP_ODR_120HZ           = 0x06;  // bits[3:1]=011 → 120 Hz
 // SFLP output registers — embedded page; 6 bytes (3 × float16): qx, qy, qz
 // ⚠  Verify base address against datasheet before first use
 constexpr uint8_t SFLP_GAME_ROTATION_VECTOR_L = 0x6B;  // embedded page
+
+// ── FIFO (REQUIRED FOR SFLP) ────────────────────────────────────────────────
+constexpr uint8_t FIFO_CTRL1 = 0x07;
+constexpr uint8_t FIFO_CTRL2 = 0x08;
+constexpr uint8_t FIFO_CTRL3 = 0x09;
+constexpr uint8_t FIFO_CTRL4 = 0x0A;
+
+constexpr uint8_t FIFO_STATUS1 = 0x3A;
+constexpr uint8_t FIFO_DATA_OUT_TAG = 0x78;
+
+// FIFO modes
+constexpr uint8_t FIFO_MODE_CONTINUOUS = 0x06;
+
+// TAG for SFLP quaternion (check datasheet if mismatch)
+constexpr uint8_t FIFO_TAG_SFLP_GAME_ROT = 0x13; 
 
 } // namespace LSM6DSV
 

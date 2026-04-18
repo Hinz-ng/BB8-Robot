@@ -572,9 +572,10 @@ function handlePacket(p) {
     const gx = toFiniteNumber(p.gx ?? p.gyro_x_rads, 0);
     const gy = toFiniteNumber(p.gy ?? p.gyro_y_rads, 0);
     const gz = toFiniteNumber(p.gz ?? p.gyro_z_rads, 0);
-    const pitchDeg = toFiniteNumber(p.pitch_deg ?? p.pitch, 0);
-    const rollDeg  = toFiniteNumber(p.roll_deg  ?? p.roll, 0);
-
+    const pitchDeg = (p.pitch_deg === null || p.pitch_deg === undefined)
+                     ? NaN : toFiniteNumber(p.pitch_deg, NaN);
+    const rollDeg  = (p.roll_deg  === null || p.roll_deg  === undefined)
+                     ? NaN : toFiniteNumber(p.roll_deg,  NaN);
     // Accel
     setImu('ax', ax, 20);
     setImu('ay', ay, 20);

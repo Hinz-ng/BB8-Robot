@@ -45,6 +45,8 @@ public:
     bool     enableSFLP();  // called once inside begin() — do not call separately
     SFLPData readSFLP();    // burst-read 6 bytes, decode float16, reconstruct qw
 
+    void debugDump();
+    
 private:
     uint8_t  spiRead8(uint8_t reg);
     void     spiBurstRead(uint8_t reg, uint8_t* buf, uint8_t len);

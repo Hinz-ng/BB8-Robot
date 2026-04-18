@@ -8,40 +8,75 @@ bool IMU::begin() {
     pinMode(PIN_IMU_CS, OUTPUT);
     digitalWrite(PIN_IMU_CS, HIGH);
     SPI.begin(PIN_SPI_SCLK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_IMU_CS);
+    delay(10); // power-on startup
 
-    delay(10); // power-on startup time (datasheet: ≥1ms)
-
+    // ── WHO_AM_I ─────────────────────────────────────────────────────────────
     uint8_t whoami = spiRead8(LSM6DSV::WHO_AM_I_REG);
     if (whoami != LSM6DSV::WHO_AM_I_VAL) {
         Serial.printf("[IMU] WHO_AM_I mismatch: got 0x%02X, expected 0x%02X\n",
                       whoami, LSM6DSV::WHO_AM_I_VAL);
         return false;
     }
+    Serial.printf("[IMU] WHO_AM_I OK: 0x%02X\n", whoami);
 
-    // Enable auto-increment + block data update
-    spiWrite8(LSM6DSV::CTRL3,
-              LSM6DSV::CTRL3_IF_INC | LSM6DSV::CTRL3_BDU);
+    // ── Software reset ────────────────────────────────────────────────────────
+    // Required before any configuration. Without this, ODR writes can silently
+    // fail on cold boot. SW_RESET bit auto-clears when reset is complete.
+    spiWrite8(LSM6DSV::CTRL3, 0x01); // bit 0 = SW_RESET
+    delay(50); // datasheet: max reset time 50 ms
+    // Verify reset cleared — bit 0 should be 0 now
+    uint8_t ctrl3_post_reset = spiRead8(LSM6DSV::CTRL3);
+    if (ctrl3_post_reset & 0x01) {
+        Serial.println("[IMU] WARNING: SW_RESET did not clear — chip may be unresponsive");
+    }
+    Serial.printf("[IMU] SW_RESET complete. CTRL3=0x%02X\n", ctrl3_post_reset);
 
-    // Accel: 104 Hz, ±4g
-    spiWrite8(LSM6DSV::CTRL1,
-              LSM6DSV::ACCEL_ODR_104HZ | LSM6DSV::ACCEL_FS_4G);
+    // ── Configure ─────────────────────────────────────────────────────────────
+    // 1. Enable accel FIRST
+spiWrite8(LSM6DSV::CTRL1, LSM6DSV::ACCEL_ODR_104HZ | LSM6DSV::ACCEL_FS_4G);
+delay(50);  // critical: allow accel domain to stabilize
 
-    // Gyro: 104 Hz, ±500 dps
-    spiWrite8(LSM6DSV::CTRL2,
-              LSM6DSV::GYRO_ODR_104HZ | LSM6DSV::GYRO_FS_500DPS);
+// 2. Then enable gyro
+spiWrite8(LSM6DSV::CTRL2, LSM6DSV::GYRO_ODR_104HZ | LSM6DSV::GYRO_FS_500DPS);
+delay(50);  // critical: gyro startup time
 
-    delay(20); // ODR startup settling
-    Serial.println("[IMU] LSM6DSV16XTR initialized OK");
-    
-    // ── SFLP enable ───────────────────────────────────────────────────────────
-    // Must be called after ODR is configured (CTRL1/CTRL2 set above).
-    // SFLP requires both accel and gyro to be running.
-    if (!enableSFLP()) {
-        Serial.println("[IMU] WARNING: SFLP enable failed — state estimator will have no data");
-        // Non-fatal: raw accel/gyro still works; state estimator will return invalid.
+// Explicitly enable gyro (required on some silicon)
+uint8_t ctrl10 = spiRead8(LSM6DSV::CTRL10);
+spiWrite8(LSM6DSV::CTRL10, ctrl10 | LSM6DSV::GYRO_ENABLE);
+delay(20);
+
+// 3. THEN enable interface features
+spiWrite8(LSM6DSV::CTRL3, LSM6DSV::CTRL3_IF_INC | LSM6DSV::CTRL3_BDU);
+delay(10);
+
+    // ── Readback verification — paste these values in your bug report ─────────
+    uint8_t ctrl1v = spiRead8(LSM6DSV::CTRL1);
+    uint8_t ctrl2v = spiRead8(LSM6DSV::CTRL2);
+    uint8_t ctrl3v = spiRead8(LSM6DSV::CTRL3);
+    Serial.printf("[IMU] CTRL1=0x%02X (expect 0x48)  "
+                  "CTRL2=0x%02X (expect 0x48)  "
+                  "CTRL3=0x%02X (expect 0x44)\n",
+                  ctrl1v, ctrl2v, ctrl3v);
+
+    if (ctrl2v != (LSM6DSV::GYRO_ODR_104HZ | LSM6DSV::GYRO_FS_500DPS)) {
+        Serial.printf("[IMU] FATAL: CTRL2 mismatch — gyro ODR not set. "
+                      "Got 0x%02X, want 0x48. Check SPI wiring (MOSI/CS).\n", ctrl2v);
+        // Do not return false — accel still works; SFLP will degrade gracefully.
     }
 
-    Serial.println("[IMU] LSM6DSV16XTR initialized OK");
+    Serial.println("[IMU] LSM6DSV16XTR initialized");
+
+    if (!enableSFLP()) {
+        Serial.println("[IMU] WARNING: SFLP enable failed");
+    }
+
+// Kick-start gyro pipeline
+for (int i = 0; i < 5; i++) {
+    uint8_t dummy[6];
+    spiBurstRead(LSM6DSV::OUTX_L_G, dummy, 6);
+    delay(10);
+}
+
     return true;
 }
 
@@ -77,6 +112,18 @@ RawIMUData IMU::read() {
     // With IF_INC enabled, address auto-increments across the 12 bytes
     spiBurstRead(LSM6DSV::OUTX_L_G, buf, 12);
     out.valid = true;
+
+// ── TEMPORARY DIAGNOSTIC — remove after gyro confirmed working ────────────
+    // If gyro bytes are all 0x00, the ODR is not set (gyro is off).
+    // If they are all 0xFF, SPI MISO is floating.
+    static uint8_t printCount = 0;
+    if (printCount < 20) { // print first 20 reads only
+        Serial.printf("[IMU] Raw gyro bytes: %02X %02X %02X %02X %02X %02X | "
+                      "accel: %02X %02X %02X %02X %02X %02X\n",
+                      buf[0], buf[1], buf[2], buf[3], buf[4], buf[5],
+                      buf[6], buf[7], buf[8], buf[9], buf[10], buf[11]);
+        printCount++;
+    }
 
     // Gyro (little-endian int16)
     int16_t gx = (int16_t)((buf[1] << 8) | buf[0]);
@@ -125,73 +172,76 @@ void IMU::spiWrite8(uint8_t reg, uint8_t val) {
 }
 
 bool IMU::enableSFLP() {
-    spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, LSM6DSV::EMBEDDED_FUNC_REG_ACCESS);
-    delay(2);  // was 1ms — some silicon revisions need more settling
 
+    // Enable embedded function access
+    spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, LSM6DSV::EMBEDDED_FUNC_REG_ACCESS);
+    delay(2);
+
+    // Enable SFLP
     uint8_t ena = spiRead8(LSM6DSV::EMB_FUNC_EN_A);
     spiWrite8(LSM6DSV::EMB_FUNC_EN_A, ena | LSM6DSV::SFLP_GAME_EN);
 
-    // Read back and verify bit 2 was actually set
     uint8_t verify = spiRead8(LSM6DSV::EMB_FUNC_EN_A);
+
+    spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, 0x00);
+
     if (!(verify & LSM6DSV::SFLP_GAME_EN)) {
-        spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, 0x00);
-        Serial.printf("[IMU] SFLP enable FAILED — EMB_FUNC_EN_A readback=0x%02X\n", verify);
+        Serial.println("[IMU] SFLP enable FAILED");
         return false;
     }
 
-    spiWrite8(LSM6DSV::SFLP_ODR_REG, LSM6DSV::SFLP_ODR_120HZ);
-    spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, 0x00);
+    // ── FIFO CONFIG (CRITICAL) ─────────────────────────
 
-    delay(15);  // was 10ms — SFLP DSP startup
-    Serial.printf("[IMU] SFLP enabled. EMB_FUNC_EN_A=0x%02X\n", verify);
+    // Set FIFO to continuous mode
+    spiWrite8(LSM6DSV::FIFO_CTRL4, LSM6DSV::FIFO_MODE_CONTINUOUS);
+
+    // Enable SFLP batching into FIFO
+    spiWrite8(LSM6DSV::FIFO_CTRL2, 0x08); // SFLP batch enable (verify bit if needed)
+
+    delay(20);
+
+    Serial.println("[IMU] SFLP + FIFO enabled");
+
     return true;
 }
 
 SFLPData IMU::readSFLP() {
+
     SFLPData out{};
+
+    uint8_t tag;
     uint8_t buf[6];
 
-    spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, LSM6DSV::EMBEDDED_FUNC_REG_ACCESS);
-    delayMicroseconds(10); // brief settling after page switch
-    spiBurstRead(LSM6DSV::SFLP_GAME_ROTATION_VECTOR_L, buf, 6);
-    spiWrite8(LSM6DSV::FUNC_CFG_ACCESS, 0x00);
+    // Read tag
+    spiBurstRead(LSM6DSV::FIFO_DATA_OUT_TAG, &tag, 1);
 
-    // Decode 3 little-endian float16 values → float32
-    uint16_t hx = (uint16_t)((buf[1] << 8) | buf[0]);
-    uint16_t hy = (uint16_t)((buf[3] << 8) | buf[2]);
-    uint16_t hz = (uint16_t)((buf[5] << 8) | buf[4]);
+    uint8_t sensorTag = tag >> 3;
+
+    if (sensorTag != LSM6DSV::FIFO_TAG_SFLP_GAME_ROT) {
+        out.valid = false;
+        return out;
+    }
+
+    // Read quaternion payload
+    spiBurstRead(LSM6DSV::FIFO_DATA_OUT_TAG, buf, 6);
+
+    uint16_t hx = (buf[1] << 8) | buf[0];
+    uint16_t hy = (buf[3] << 8) | buf[2];
+    uint16_t hz = (buf[5] << 8) | buf[4];
 
     out.qx = float16ToFloat32(hx);
     out.qy = float16ToFloat32(hy);
     out.qz = float16ToFloat32(hz);
 
-    // Guard 1: NaN from float16(0xFFFF) — uninitialized or SPI fault
-    if (std::isnan(out.qx) || std::isnan(out.qy) || std::isnan(out.qz)) {
-        out.qx = out.qy = out.qz = 0.0f;
-        out.qw    = 1.0f;
+    float norm2 = out.qx*out.qx + out.qy*out.qy + out.qz*out.qz;
+
+    if (norm2 >= 1.0f) {
         out.valid = false;
         return out;
     }
 
-    // Guard 2: Identity quaternion from float16(0x0000) — wrong register address
-    // or SFLP not yet outputting fusion data.
-    // A real orientation will always have at least one non-zero vector component
-    // unless the robot is in exact boot pose (which can't persist through motion).
-    // We accept identity only for the first SFLP_WARMUP_TICKS ticks, then flag invalid.
-    if (hx == 0x0000 && hy == 0x0000 && hz == 0x0000) {
-        out.qw    = 1.0f;
-        out.valid = false;  // register address wrong, or SFLP not yet running
-        return out;
-    }
-
-    float qw2 = 1.0f - (out.qx*out.qx + out.qy*out.qy + out.qz*out.qz);
-    if (qw2 < 0.0f) {
-        out.qw    = 1.0f;
-        out.valid = false;
-    } else {
-        out.qw    = sqrtf(qw2);
-        out.valid = true;
-    }
+    out.qw = sqrtf(1.0f - norm2);
+    out.valid = true;
 
     return out;
 }
@@ -225,3 +275,44 @@ float IMU::float16ToFloat32(uint16_t h) {
     return result;
 }
 
+void IMU::debugDump() {
+    Serial.println("\n========== IMU DEBUG ==========");
+
+    uint8_t who = spiRead8(LSM6DSV::WHO_AM_I_REG);
+    Serial.printf("WHO_AM_I: 0x%02X\n", who);
+
+    uint8_t ctrl1 = spiRead8(LSM6DSV::CTRL1);
+    uint8_t ctrl2 = spiRead8(LSM6DSV::CTRL2);
+    uint8_t ctrl3 = spiRead8(LSM6DSV::CTRL3);
+    uint8_t status = spiRead8(LSM6DSV::STATUS_REG);
+
+    Serial.printf("CTRL1: 0x%02X\n", ctrl1);
+    Serial.printf("CTRL2: 0x%02X\n", ctrl2);
+    Serial.printf("CTRL3: 0x%02X\n", ctrl3);
+    Serial.printf("STATUS: 0x%02X  XLDA:%d  GDA:%d\n",
+                  status,
+                  (status & LSM6DSV::STATUS_XLDA) ? 1 : 0,
+                  (status & LSM6DSV::STATUS_GDA) ? 1 : 0);
+
+    uint8_t buf[12];
+    spiBurstRead(LSM6DSV::OUTX_L_G, buf, 12);
+
+    Serial.print("RAW BYTES: ");
+    for (int i = 0; i < 12; i++) {
+        Serial.printf("%02X ", buf[i]);
+    }
+    Serial.println();
+
+    int16_t gx = (int16_t)((buf[1] << 8) | buf[0]);
+    int16_t gy = (int16_t)((buf[3] << 8) | buf[2]);
+    int16_t gz = (int16_t)((buf[5] << 8) | buf[4]);
+
+    int16_t ax = (int16_t)((buf[7] << 8) | buf[6]);
+    int16_t ay = (int16_t)((buf[9] << 8) | buf[8]);
+    int16_t az = (int16_t)((buf[11] << 8) | buf[10]);
+
+    Serial.printf("RAW GYRO:  %d  %d  %d\n", gx, gy, gz);
+    Serial.printf("RAW ACCEL: %d  %d  %d\n", ax, ay, az);
+
+    Serial.println("================================\n");
+}
