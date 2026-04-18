@@ -17,6 +17,16 @@ IMUState StateEstimator::update(const RawIMUData& raw) {
     }
 
     const LogicalAxes l = remapAxes(raw);
+
+    // ── Angular rates in logical frame ────────────────────────────────────────
+    // Expose before the initialisation branch so rates are valid from tick 0.
+    // l.g_pitch/g_roll are bias-corrected: imu.cpp subtracts _cal.gyro_bias_*
+    // before returning RawIMUData, and remapAxes() passes them through unchanged.
+    // The balance controller uses these directly as the Kd input — do NOT
+    // differentiate pitch_deg, which would amplify filter noise.
+    _state.pitch_rate_rads = l.g_pitch;
+    _state.roll_rate_rads  = l.g_roll;
+
     const float ap = accelPitch(l);
     const float ar = accelRoll(l);
 
@@ -59,21 +69,12 @@ IMUState StateEstimator::update(const RawIMUData& raw) {
 //   STANDARD:        Z_imu=up,  X_imu=forward → at rest az≈+9.81
 //   Z_FORWARD_Y_UP:  Z_imu=fwd, Y_imu=up      → at rest ay≈+9.81
 //   Z_FORWARD_X_UP:  Z_imu=fwd, X_imu=up      → at rest ax≈+9.81
-//
-// Derivation (right-hand frame, F=forward, L=left, U=up):
-//   Z_FORWARD_Y_UP: X_imu = F×L/U = robot_left  → a_left=+ax, g_pitch=+gx
-//   Z_FORWARD_X_UP: Y_imu = F×U   = robot_right → a_left=-ay, g_pitch=-gy
-//
-// Verify on hardware: hold robot still, confirm which axis reads +9.81 in
-// the Serial print, then set IMU_MOUNTING accordingly in project_wide_defs.h.
 StateEstimator::LogicalAxes StateEstimator::remapAxes(const RawIMUData& d) {
     LogicalAxes l{};
 
     switch (IMU_MOUNTING) {
 
     case IMUMounting::STANDARD:
-        // Default: Z up, X forward, Y left.
-        // Pitch = rotation about Y (lateral). Roll = rotation about X (forward).
         l.a_fwd   =  d.accel_x_ms2;
         l.a_left  =  d.accel_y_ms2;
         l.a_up    =  d.accel_z_ms2;
@@ -82,8 +83,6 @@ StateEstimator::LogicalAxes StateEstimator::remapAxes(const RawIMUData& d) {
         break;
 
     case IMUMounting::Z_FORWARD_Y_UP:
-        // Z toward robot nose, Y up, X left.
-        // Pitch = rotation about X (lateral=left). Roll = rotation about Z (forward).
         l.a_fwd   =  d.accel_z_ms2;
         l.a_left  =  d.accel_x_ms2;
         l.a_up    =  d.accel_y_ms2;
@@ -92,13 +91,10 @@ StateEstimator::LogicalAxes StateEstimator::remapAxes(const RawIMUData& d) {
         break;
 
     case IMUMounting::Z_FORWARD_X_UP:
-        // Z toward robot nose, X up, Y right (so robot-left = -Y).
-        // Pitch = rotation about robot-left = -IMU_Y → negate gy.
-        // Roll  = rotation about forward = IMU_Z → gz.
         l.a_fwd   =  d.accel_z_ms2;
-        l.a_left  = -d.accel_y_ms2;   // Y_imu = robot-right; left = -right
+        l.a_left  = -d.accel_y_ms2;
         l.a_up    =  d.accel_x_ms2;
-        l.g_pitch = -d.gyro_y_rads;   // positive pitch (nose up) = negative IMU-Y rotation
+        l.g_pitch = -d.gyro_y_rads;
         l.g_roll  =  d.gyro_z_rads;
         break;
     }
@@ -110,7 +106,6 @@ StateEstimator::LogicalAxes StateEstimator::remapAxes(const RawIMUData& d) {
 // Tilt about the lateral axis from accel alone.
 // Formula: atan2(-a_fwd, sqrt(a_left² + a_up²))
 // Returns zero when a_fwd=0, a_up>0 (upright). Positive = nose up.
-// Works for all mountings because remapAxes() has already normalised the axes.
 float StateEstimator::accelPitch(const LogicalAxes& l) {
     const float denom = sqrtf(l.a_left * l.a_left + l.a_up * l.a_up);
     return atan2f(-l.a_fwd, denom);

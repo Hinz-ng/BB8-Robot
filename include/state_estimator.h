@@ -3,7 +3,8 @@
 // purpose: complementary filter — fuses gyro integration with accel tilt
 //          correction to produce pitch and roll angle estimates
 // inputs:  RawIMUData (from imu.h) — must already have gyro bias removed
-// outputs: IMUState struct (pitch_rad, roll_rad, pitch_deg, roll_deg, valid)
+// outputs: IMUState struct (pitch_rad, roll_rad, pitch_deg, roll_deg,
+//          pitch_rate_rads, roll_rate_rads, valid)
 // deps:    imu.h, project_wide_defs.h
 // date:    2025
 //
@@ -32,11 +33,14 @@
 #include <cmath>
 
 struct IMUState {
-    float pitch_rad;  // rad — positive = nose up
-    float roll_rad;   // rad — positive = right side down
-    float pitch_deg;  // deg — convenience copy for telemetry + PD inputs
-    float roll_deg;   // deg
-    bool  valid;      // false if input RawIMUData was invalid or not yet seeded
+    float pitch_rad;       // rad — positive = nose up
+    float roll_rad;        // rad — positive = right side down
+    float pitch_deg;       // deg — convenience copy for telemetry + PD inputs
+    float roll_deg;        // deg
+    float pitch_rate_rads; // rad/s — gyro in pitch axis (logical frame), bias-corrected
+                           //         use this for Kd term; do NOT differentiate pitch_deg
+    float roll_rate_rads;  // rad/s — gyro in roll axis (logical frame), bias-corrected
+    bool  valid;           // false if input RawIMUData was invalid or not yet seeded
 };
 
 class StateEstimator {

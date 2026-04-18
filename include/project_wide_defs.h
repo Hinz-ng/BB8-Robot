@@ -36,8 +36,8 @@ constexpr int SERVO_PULSE_MAX_US   = 2000; // µs — full speed other direction
 // ── Drive servo mounting flags ────────────────────────────────────────────────
 // Set true for any wheel that spins the wrong direction during bringup.
 // Verify: vel_y=+0.2 should move the sphere forward. If a wheel goes backward,
-// set its REVERSED flag to true.  Do not change the mixing math in motion_controller.cpp.
-constexpr bool DRIVE_LEFT_REVERSED  = false; // flip after bringup if needed
+// set its REVERSED flag to true. Do not change the mixing math in motion_controller.cpp.
+constexpr bool DRIVE_LEFT_REVERSED  = false;
 constexpr bool DRIVE_RIGHT_REVERSED = true;  // typical for mirrored mounting
 
 // ── Drive speed ───────────────────────────────────────────────────────────────
@@ -49,18 +49,11 @@ constexpr int  PIN_OE              = 2;    // active LOW — gates drive servo p
 constexpr uint32_t OE_BOOT_HOLD_MS = 1000; // hold outputs disabled at boot
 
 // ── Complementary Filter ─────────────────────────────────────────────────────
-// DEPRECATED — replaced by LSM6DSV16XTR SFLP on-chip fusion (Phase 4+).
-// Retained for reference. Remove when SFLP is confirmed stable on hardware.
+// Note: LSM6DSV16XTR has on-chip SFLP fusion (Phase 4+ candidate).
+// Complementary filter is the active approach until SFLP is validated on hardware.
 constexpr float CF_ALPHA = 0.98f;
-
-// ── Sphere Controller ────────────────────────────────────────────────────────
-constexpr float SPHERE_KP_PITCH   = 0.0f; // tune after bringup
-constexpr float SPHERE_KD_PITCH   = 0.0f;
-constexpr float SPHERE_KP_ROLL    = 0.0f;
-constexpr float SPHERE_KD_ROLL    = 0.0f;
-constexpr float SPHERE_KP_MAX     = 50.0f;
-constexpr float SPHERE_KD_MAX     = 10.0f;
-constexpr float SPHERE_ESTOP_PITCH_DEG = 30.0f; // fall threshold
+// Rate-dependent. Recalculate if IMU_LOOP_HZ changes:
+//   alpha ≈ 1 - (1 / (tau_sec * IMU_LOOP_HZ))  [tau ≈ 0.5 s at alpha=0.98, 100 Hz]
 
 // ── IMU Mounting Orientation ──────────────────────────────────────────────────
 // Defines how the physical IMU is oriented on the chassis.
@@ -75,3 +68,57 @@ constexpr float SPHERE_ESTOP_PITCH_DEG = 30.0f; // fall threshold
 // Change only this line after physical mounting is confirmed.
 enum class IMUMounting { STANDARD, Z_FORWARD_Y_UP, Z_FORWARD_X_UP };
 constexpr IMUMounting IMU_MOUNTING = IMUMounting::Z_FORWARD_Y_UP;
+
+// ── Sphere Safety ─────────────────────────────────────────────────────────────
+constexpr float SPHERE_ESTOP_PITCH_DEG = 80.0f; // deg — hard stop above this tilt
+
+// ── Balance Controller ────────────────────────────────────────────────────────
+// Normalized gains: Kp=1.0 applies full CORRECTION_MAX at the estop boundary (30°).
+//                   Kd=1.0 applies full CORRECTION_MAX at RATE_REF_DEGS (180 °/s).
+// This makes gains dimensionless and directly interpretable:
+//   Kp = 0.5 → at 15° tilt (half of estop), apply 50% of CORRECTION_MAX.
+//   Kd = 0.3 → at 180°/s angular rate, apply 30% of CORRECTION_MAX.
+//
+// Bringup sequence (see tuning guide in response):
+//   Step 0 — Verify SPHERE_BALANCE_PITCH_SIGN BEFORE enabling any gain.
+//   Step 1 — Kp = 0.5, Kd = 0.0 → confirm restoring behaviour.
+//   Step 2 — Increase Kp until onset of oscillation; back off 30%.
+//   Step 3 — Add Kd to damp residual oscillation.
+//   Step 4 — Enable lean feedforward after basic PD is stable.
+//
+// All gains tunable live via CMD:BALANCE_TUNE WebSocket command.
+constexpr float SPHERE_BALANCE_KP_PITCH_DEFAULT  = 0.5f;  // start here; tune upward
+constexpr float SPHERE_BALANCE_KD_PITCH_DEFAULT  = 0.0f;  // add AFTER Kp is verified
+constexpr float SPHERE_BALANCE_KP_ROLL_DEFAULT   = 0.3f;
+constexpr float SPHERE_BALANCE_KD_ROLL_DEFAULT   = 0.0f;
+
+// WebSocket gain ceilings — clamped at parse time in webcomm.cpp.
+// Raise only after servo lag is measured and phase margin is confirmed.
+constexpr float SPHERE_BALANCE_KP_MAX            = 3.0f;
+constexpr float SPHERE_BALANCE_KD_MAX            = 2.0f;
+
+// Max velocity correction added to user drive command (both axes, [-1, 1] space).
+// Reduce if balance correction overwhelms user drive input during manual control.
+constexpr float SPHERE_BALANCE_CORRECTION_MAX    = 0.70f;
+
+// Deadband — suppress corrections when nearly upright to prevent servo jitter.
+// Increase if servos chatter at rest; decrease if response feels sluggish near zero.
+constexpr float SPHERE_BALANCE_DEADBAND_DEG      = 0.8f;  // deg
+
+// Lean feedforward: desired pitch setpoint = vel_y_commanded * this [deg].
+// Leave at 0 until basic PD is stable. Increase to 3–8 to reduce drive-vs-balance
+// fighting during sustained motion. At 5°: full-speed forward commands a 5° forward lean.
+constexpr float SPHERE_BALANCE_LEAN_DEG_PER_UNIT = 0.0f;
+
+// Reference angular rate for Kd normalization [deg/s].
+// rate_norm = pitch_rate_degs / RATE_REF_DEGS.
+// 180°/s ≈ half-rotation per second — aggressive but achievable during rocking.
+// If derivative correction feels too strong at moderate speeds, increase this value.
+constexpr float SPHERE_BALANCE_RATE_REF_DEGS     = 180.0f;
+
+// Sign convention — MUST verify on hardware before enabling any gain (Step 0).
+// +1: nose-up pitch (positive error) → negative correction (drive backward to restore).
+// Physically: when drive unit lags sphere (nose up), drive backward to reduce the lag.
+// If enabling balance INCREASES oscillation, flip to -1 and reflash.
+constexpr int SPHERE_BALANCE_PITCH_SIGN = -1;
+constexpr int SPHERE_BALANCE_ROLL_SIGN  = 1;
