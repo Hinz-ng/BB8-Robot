@@ -13,6 +13,10 @@
 #include "balance_controller.h"
 #include "espnow_protocol.h"
 #include "espnow_config.h"
+#include <esp_now.h>
+#if __has_include(<esp_arduino_version.h>)
+#include <esp_arduino_version.h>
+#endif
 
 // Callback types — identical to removed webcomm.h
 using DriveCallback         = std::function<void(float vel_x, float vel_y)>;
@@ -63,8 +67,13 @@ private:
     bool _addPeer(const uint8_t* mac);
 
     static void _onSendCb(const uint8_t* mac, esp_now_send_status_t status);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
     static void _onRecvCb(const esp_now_recv_info_t* info,
                           const uint8_t* data, int len);
+#else
+    static void _onRecvCb(const uint8_t* mac,
+                          const uint8_t* data, int len);
+#endif
 
     static ESPNowBody* _instance;
     static float _clamp1(float v) {

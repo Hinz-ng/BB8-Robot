@@ -45,6 +45,8 @@ bool ESPNowBody::begin() {
     if (ESPNOW_PEER_DISCOVERY) {
         static const uint8_t bcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
         _addPeer(bcast);
+        _peerAdded = true;  // allow sendTelemetry() to broadcast until unicast peer discovered
+        memcpy(_peerMac, bcast, 6);
         Serial.println("[ESPNOW] Discovery mode: broadcasting.");
     } else {
         if (!_addPeer(ESPNOW_HEAD_AP_MAC)) return false;
@@ -110,10 +112,17 @@ void ESPNowBody::_onSendCb(const uint8_t*, esp_now_send_status_t status) {
     if (_instance && status == ESP_NOW_SEND_SUCCESS) _instance->_onAck();
 }
 
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
 void ESPNowBody::_onRecvCb(const esp_now_recv_info_t* info,
                             const uint8_t* data, int len) {
     if (_instance) _instance->_onRecv(info->src_addr, data, len);
 }
+#else
+void ESPNowBody::_onRecvCb(const uint8_t* mac,
+                            const uint8_t* data, int len) {
+    if (_instance) _instance->_onRecv(mac, data, len);
+}
+#endif
 
 void ESPNowBody::_onAck() {
     _lastAckMs = millis();
